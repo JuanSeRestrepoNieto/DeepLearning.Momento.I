@@ -16,7 +16,7 @@ from model import MLP
 
 # Hiperparametros
 batch_size  = 128
-epochs      = 60
+epochs      = 70
 lr          = 0.001
 patience    = 12
 image_size  = 32

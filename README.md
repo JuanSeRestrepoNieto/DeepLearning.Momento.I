@@ -1,87 +1,211 @@
 # Momento Evaluativo I — Clasificación de imágenes con un MLP
 
 Clasificación de la **subcategoría de un producto de moda** (Topwear, Shoes,
-Bags, Watches, …) a partir de su imagen, usando un Perceptrón Multicapa
-implementado en PyTorch.
+Bags, Watches, …) a partir de su imagen, con un Perceptrón Multicapa en PyTorch.
 
-## Dataset
+## El problema
 
-**Fashion Product Images (Small)** — Kaggle, `paramaggarwal/fashion-product-images-small`
+**Fashion Product Images (Small)** — Kaggle, `paramaggarwal/fashion-product-images-small`.
 
-Se descarga con `kagglehub` (ver `download_data.py`). Se usa la variante *small*
-(60×80 px, ~565 MB) en vez de la full-res de 25 GB: contiene exactamente las
-mismas imágenes y el mismo `styles.csv`, y como el MLP reescala a 32×32 de todos
-modos, la resolución original es irrelevante para esta tarea.
+De las 44.441 imágenes del catálogo se usan **43.974**, repartidas en **27
+subcategorías**. Se descartaron las categorías con menos de 100 muestras porque
+con tan pocos casos no es posible repartirlas entre entrenamiento, validación y
+prueba, ni medir nada confiable sobre ellas.
 
-| | |
+El dato que condiciona todo el trabajo es el **desbalance**:
+
+Distribución de clases (figures/eda_distribucion_clases.png)
+
+`Topwear` concentra 15.398 imágenes (35 % del total) y `Free Gifts` apenas 104.
+Son **148 a 1**. Eso significa que un modelo que respondiera siempre "Topwear"
+acertaría el 35 % de las veces sin haber aprendido absolutamente nada, y obliga a
+medir el desempeño con algo más que el porcentaje de aciertos.
+
+## Qué se hizo
+
+Cada imagen se reduce a 32 × 32 píxeles y se entrega a una red de cuatro capas
+que devuelve una de las 27 categorías. Los datos se repartieron en **30.781 de
+entrenamiento, 6.596 de validación y 6.597 de prueba**, manteniendo la misma
+proporción de clases en los tres grupos y reservando el de prueba sin tocarlo
+hasta el final.
+
+Como el dataset está tan desbalanceado, durante el entrenamiento se le dio **más
+peso a los errores sobre las categorías pequeñas**, para que el modelo no las
+ignorara. El entrenamiento corrió 70 épocas y se conservó el modelo de la época
+**69**, el mejor sobre el conjunto de validación.
+
+## Resultados
+
+| Métrica | Valor |
 |---|---|
-| Imágenes en disco | 44.441 |
-| Filas utilizables tras cruzar `styles.csv` con las imágenes y filtrar clases raras | **43.974** |
-| Clases (`subCategory`) | **27** |
-| Resolución de entrada | 32 × 32 × 3 |
-| Features tras aplanar (n) | **3.072** |
+| **Accuracy** (aciertos sobre el total) | **90,50 %** |
+| **F1-Score macro** (todas las categorías pesan igual) | **0,8250** |
+| F1-Score ponderado (cada categoría pesa según su tamaño) | 0,9089 |
+| Precision macro | 0,8027 |
+| Recall macro | 0,8630 |
+| Línea base (responder siempre `Topwear`) | 35,0 % |
 
-### Definición de la tarea
+### Las mejores y las peores categorías
 
-La etiqueta es la columna `subCategory` de `styles.csv`. De las 45 subcategorías
-originales se **descartan las que tienen menos de 100 muestras**, porque no
-permiten una partición estratificada en tres subconjuntos ni una evaluación
-estadísticamente significativa. Quedan 27 clases.
+| Mejores | F1 | | Peores | F1 |
+|---|---|---|---|---|
+| Eyewear | 0,9875 | | Free Gifts | 0,4091 |
+| Belts | 0,9799 | | Dress | 0,5222 |
+| Nails | 0,9796 | | Loungewear and Nightwear | 0,6260 |
+| Ties | 0,9744 | | Scarves | 0,6341 |
+| Shoes | 0,9543 | | Makeup | 0,7103 |
+| Topwear | 0,9453 | | Sandal | 0,7351 |
 
-### Desbalance
+Peores clases (figures/peores_clases.png)
 
-El dataset está fuertemente desbalanceado:
+### Los errores más frecuentes
 
-| Clase | Muestras | % |
-|-------|----------|---|
-| Topwear | 15.398 | 35,02 % |
-| Shoes | 7.343 | 16,70 % |
-| Bags | 3.055 | 6,95 % |
-| Bottomwear | 2.693 | 6,12 % |
-| Watches | 2.542 | 5,78 % |
-| … | … | … |
-| Apparel Set | 106 | 0,24 % |
-| Free Gifts | 104 | 0,24 % |
+| Real → Predicha | Casos |
+|---|---|
+| Topwear → Dress | 67 |
+| Topwear → Innerwear | 58 |
+| Bags → Wallets | 40 |
+| Shoes → Sandal | 32 |
+| Topwear → Jewellery | 24 |
+| Flip Flops → Shoes | 21 |
+| Watches → Free Gifts | 14 |
 
-**Razón de desbalance: 148 a 1.** Esto tiene dos consecuencias metodológicas:
+Matriz de confusión (figures/matriz_confusion.png)
 
-1. El *accuracy* deja de ser una métrica confiable — un modelo que prediga
-   siempre `Topwear` acertaría el 35 % sin haber aprendido nada. Por eso se
-   reporta también el **F1-Score macro**, que promedia las clases sin ponderar
-   por su tamaño.
-2. Se aplican **pesos por clase** en la función de pérdida
-   (`CrossEntropyLoss(weight=...)`), inversamente proporcionales a su frecuencia.
+## Interpretación
 
-## Preprocesamiento
+### El 90 % de aciertos es un número engañoso
 
-1. Se cruzan las filas de `styles.csv` con las imágenes realmente presentes en
-   disco (`on_bad_lines="skip"` porque algunas filas tienen comas de más en
-   `productDisplayName`).
-2. Cada imagen se convierte a RGB, se reescala a 32×32 y se guarda como `uint8`
-   (cuatro veces menos memoria que `float32`). El resultado se cachea en
-   `data/fashion_cache_32.npz` para no repetir la decodificación.
-3. **Partición estratificada 70 / 15 / 15** con `random_state=42`.
-4. **Normalización Z-Score por canal**, con media y desviación calculadas
-   **únicamente sobre el conjunto de entrenamiento**, para evitar fuga de
-   información (*data leakage*).
-5. La imagen se aplana a un vector de 3.072 componentes, que es la entrada del MLP.
+A primera vista 90,50 % parece un resultado muy bueno. Pero al comparar las dos
+formas de calcular el F1-Score aparece lo que ese número esconde: **0,9089 cuando
+cada categoría pesa según su tamaño, pero 0,8250 cuando todas pesan igual**.
 
-## Arquitectura
+La diferencia de ocho puntos se explica sola: `Topwear` y `Shoes` son más de la
+mitad del conjunto de prueba, así que el accuracy mide sobre todo qué tan bien
+clasificamos camisetas y zapatos. Cuando se obliga a que una categoría de 17
+prendas cuente lo mismo que una de 2.310, el desempeño real baja.
 
-```
-Entrada 3072 → 512 → 256 → 128 → 27 (logits)
-```
+Las dos cifras no se contradicen: responden preguntas distintas. El **F1
+ponderado** dice qué tan bien funciona el catálogo para el cliente promedio, que
+navega sobre todo las categorías grandes. El **F1 macro** dice qué tan bien
+funciona la categoría peor atendida. Si al negocio le importa que las líneas
+pequeñas también se vendan, la segunda es la que hay que mirar.
 
-Cada capa oculta lleva `BatchNorm1d → ReLU → Dropout(0.3)`. BatchNorm estabiliza
-el entrenamiento con una entrada de dimensión alta; Dropout contiene el
-sobreajuste.
+### Las curvas muestran que el modelo dejó de aprender a mitad de camino
 
-- Pérdida: `CrossEntropyLoss` con pesos por clase.
-- Optimizador: Adam, `lr = 0.001`, `batch_size = 128`.
-- **Early stopping sobre el F1-Score macro de validación** (`patience = 12`).
-  No se usa la pérdida de validación como criterio: al ponderar las clases queda
-  demasiado ruidosa y llegó a seleccionar una época con 4 puntos menos de
-  accuracy que la mejor. El F1 macro es el criterio coherente con el desbalance.
+ Curva de pérdida (figures/curva_loss.png)
+
+Esta es la gráfica más reveladora, y no dice nada bueno. El error sobre los datos
+de entrenamiento (azul) baja sin parar. El error sobre los datos de validación
+(naranja) toca su mejor punto alrededor de la **época 27** y a partir de ahí se
+queda estancado, e incluso empeora al final.
+
+Que las dos curvas se separen significa que **desde la época 27 el modelo dejó de
+aprender y empezó a memorizar**. Siguió mejorando sobre las imágenes que ya había
+visto, pero eso ya no se tradujo en acertar mejor sobre imágenes nuevas.
+
+ Curva de accuracy (figures/curva_accuracy.png)
+
+Lo interesante es que esta segunda gráfica parece decir lo contrario: las dos
+líneas van pegadas las 70 épocas y terminan juntas cerca del 90 %. Leída sola,
+diría que todo está perfecto.
+
+**Ambas gráficas son correctas; lo que falla es el accuracy como termómetro.**
+Como está dominado por las categorías grandes, sigue subiendo mientras el modelo
+mantenga `Topwear` y `Shoes` bien clasificados, y no se entera de que el
+desempeño sobre el resto se está deteriorando. Si hubiéramos evaluado solo con
+accuracy —que era lo intuitivo—, este problema habría pasado desapercibido.
+
+Curva de F1 (figures/curva_f1.png)
+
+El F1 macro sube de 0,55 a 0,83 y se aplana claramente a partir de la época 40.
+Los saltos de arriba abajo vienen de las categorías chicas: basta que `Free Gifts`
+pase de 4 a 7 aciertos —sobre 15 imágenes— para mover el promedio varios puntos.
+
+La conclusión práctica es que **alargar el entrenamiento ya no sirve**. Subir el
+tope de 60 a 70 épocas mejoró el F1 macro de 0,7993 a 0,8250, pero la curva de
+error indica que a partir de ahí solo se profundizaría la memorización.
+
+### Por qué falla donde falla
+
+Los errores no son aleatorios. Al revisarlos aparecen **tres causas distintas**,
+y conviene no mezclarlas porque cada una se arregla de forma diferente.
+
+**1. Una categoría que no se puede aprender.** `Free Gifts` es la peor de todas
+(F1 0,4091), y el modelo no tiene la culpa. No es una categoría *visual* sino
+*comercial*: sus imágenes son relojes, perfumes o bolsos que la tienda regalaba en
+alguna promoción. Lo que define esa categoría no está en la foto. Por eso el
+modelo confunde relojes con "regalos" 14 veces. Ninguna red podría resolverlo, y
+lo correcto sería **sacar esa categoría del problema**.
+
+**2. Objetos que a 32 × 32 píxeles se ven iguales.** Es el grupo más numeroso:
+`Topwear → Dress` (67 casos), `Topwear → Innerwear` (58), `Shoes → Sandal` (32).
+Un vestido y una camiseta larga, reducidos a una miniatura, son prácticamente la
+misma silueta. Lo que los distingue —el largo exacto, la textura de la tela, el
+estampado— se pierde al encoger la imagen. `Bags → Wallets` (40 casos) es una
+variante del mismo problema: es el mismo objeto a distinta escala, y como todas
+las fotos del catálogo están encuadradas igual, el modelo pierde la referencia de
+tamaño real. **Este grupo sí se arregla**, con más resolución o con un modelo que
+sepa mirar detalles.
+
+**3. Categorías con muy pocos ejemplos.** `Scarves` tiene 17 imágenes de prueba y
+`Accessories` 19. Con tan pocos casos, un solo acierto de más o de menos mueve la
+métrica varios puntos. Aquí el problema no es el modelo sino **que la medición no
+es confiable**; se resuelve consiguiendo más datos.
+
+### El modelo prefiere equivocarse por exceso
+
+Al comparar precision (0,8027) con recall (0,8630) se ve que el modelo es **más
+propenso a asignar de más que a dejar sin asignar**. Eso fue intencional: al darle
+más peso a las categorías pequeñas durante el entrenamiento, se volvió más
+arriesgado al predecirlas.
+
+`Dress` es el ejemplo extremo. Encuentra tres de cada cuatro vestidos reales, pero
+de todo lo que llama "vestido", seis de cada diez no lo son. Sin ese ajuste las
+categorías pequeñas simplemente **no aparecerían nunca** en las predicciones, lo
+cual sería peor.
+
+La decisión tiene sentido pensando en para qué sirve esto. En una tienda en línea
+los dos errores no cuestan lo mismo:
+
+- Si un producto queda **en la categoría equivocada**, el cliente que filtra por
+  "vestidos" ve camisetas. Molesta, pero se corrige editando la ficha.
+- Si un producto **no recibe su categoría**, queda invisible para quien navega por
+  categorías. Y un producto que no aparece, no se vende.
+
+El segundo error es el caro, así que conviene pecar de más y no de menos.
+
+Aun así, con 90,5 % de aciertos uno de cada diez productos quedaría mal
+clasificado: en un catálogo de 44.000 artículos son unos **4.400 errores**.
+Demasiados para etiquetar automáticamente. El uso sensato sería como
+**asistente**: que el modelo proponga las tres categorías más probables y una
+persona confirme.
+
+### La limitación de fondo
+
+El modelo recibe la imagen como una lista plana de píxeles, sin ninguna noción de
+que dos píxeles vecinos tienen que ver entre sí. Le pasa algo parecido a alguien
+que intentara reconocer una foto leyendo los colores uno por uno, en fila.
+
+Que aun así funcione bien se debe a que **las fotos de catálogo son todas
+iguales**: producto centrado, fondo blanco, mismo encuadre. En esas condiciones,
+saber qué hay en cada posición fija sí sirve. Pero eso también marca el límite del
+resultado: sobre fotos tomadas por usuarios, con fondos y ángulos variables,
+**este modelo se derrumbaría**, y el 90,5 % dejaría de ser una cifra válida.
+
+Ese es justamente el problema que resuelven las redes convolucionales, que
+aprenden a reconocer formas sin importar en qué parte de la imagen aparezcan.
+
+## Limitaciones
+
+- Las 18 subcategorías con menos de 100 muestras quedaron **excluidas**, no
+  resueltas. El modelo no sabe que existen.
+- `Free Gifts` no debería formar parte del problema y arrastra la métrica macro
+  hacia abajo.
+- La resolución de 32 × 32 elimina los detalles que distinguirían `Topwear` de
+  `Dress`.
+- Todas las imágenes vienen de un único catálogo (Myntra) con fotografía
+  homogénea. **El resultado no se traslada a fotos de usuarios.**
 
 ## Cómo ejecutar
 
@@ -112,141 +236,10 @@ python3.12 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 | Archivo | Descripción |
 |---------|-------------|
-| `download_data.py` | Descarga del dataset desde Kaggle con `kagglehub` |
-| `dataset.py` | Cruce con `styles.csv`, decodificación y reescalado de imágenes, caché, partición estratificada, Z-Score y `DataLoader`s |
-| `model.py` | Definición del MLP |
-| `main.py` | Entrenamiento, validación por época, early stopping por F1 macro y curvas |
-| `evaluate.py` | Evaluación final sobre test: métricas, matriz de confusión, peores clases y confusiones más frecuentes |
-| `eda.py` | Análisis exploratorio y figuras |
+| `download_data.py` | Descarga del dataset desde Kaggle |
+| `dataset.py` | Preparación de los datos: carga, reescalado, partición y normalización |
+| `model.py` | Definición de la red |
+| `main.py` | Entrenamiento y curvas |
+| `evaluate.py` | Evaluación final sobre el conjunto de prueba |
+| `eda.py` | Análisis exploratorio |
 | `Ejemplo/` | Código de referencia con MNIST visto en clase |
-| `v1_salud_mental/` | Versión anterior del trabajo (clasificación tabular de salud mental estudiantil) |
-
-## Resultados
-
-Partición: 30.781 train / 6.596 validación / 6.597 test.
-El entrenamiento **alcanzó el tope de 60 épocas sin disparar el early stopping**;
-el mejor checkpoint es el de la época 58 (F1 macro de validación 0,8223).
-
-| Métrica | Valor |
-|---------|-------|
-| Accuracy (test) | **89,31 %** |
-| F1-Score macro | **0,7993** |
-| F1-Score ponderado | 0,9011 |
-| Línea base (predecir siempre `Topwear`) | 35,0 % |
-
-### Mejores y peores clases
-
-| Clase | Precision | Recall | F1 | Soporte |
-|-------|-----------|--------|-----|---------|
-| Ties | 1,0000 | 1,0000 | **1,0000** | 38 |
-| Eyewear | 0,9877 | 1,0000 | 0,9938 | 161 |
-| Belts | 0,9683 | 1,0000 | 0,9839 | 122 |
-| Nails | 0,9600 | 0,9796 | 0,9697 | 49 |
-| Topwear | 0,9845 | 0,9065 | 0,9439 | 2.310 |
-| Shoes | 0,9793 | 0,9020 | 0,9391 | 1.102 |
-| … | | | | |
-| Scarves | 0,5882 | 0,5882 | 0,5882 | 17 |
-| Dress | 0,3000 | 0,7606 | 0,4303 | 71 |
-| Free Gifts | 0,0976 | 0,2667 | **0,1429** | 15 |
-
-### Confusiones más frecuentes
-
-| Real → Predicha | Casos |
-|-----------------|-------|
-| Topwear → Dress | 107 |
-| Shoes → Sandal | 79 |
-| Bags → Wallets | 40 |
-| Topwear → Innerwear | 30 |
-| Watches → Free Gifts | 29 |
-| Shoes → Flip Flops | 20 |
-
-Figuras en `figures/`: `eda_distribucion_clases.png`, `eda_ejemplos.png`,
-`eda_imagen_promedio.png`, `curva_loss.png`, `curva_accuracy.png`,
-`curva_f1.png`, `matriz_confusion.png`, `peores_clases.png`.
-
-## Interpretación de resultados
-
-### El accuracy engaña, el F1 macro no
-
-89,31 % de accuracy suena excelente, pero la brecha con el **F1 macro de 0,7993**
-—casi diez puntos— es el dato importante: el modelo es muy bueno en las clases
-grandes y bastante peor en las pequeñas. El F1 ponderado (0,9011) prácticamente
-coincide con el accuracy justamente porque ambos están dominados por `Topwear` y
-`Shoes`, que juntas son más de la mitad del conjunto de prueba. **Reportar solo el
-accuracy en un dataset con desbalance de 148 a 1 ocultaría el verdadero
-comportamiento del modelo.**
-
-El efecto de los pesos por clase se ve en la asimetría entre precision y recall
-macro: 0,7777 frente a 0,8422. Al penalizar más los errores sobre clases
-minoritarias, el modelo se vuelve más agresivo prediciéndolas — recupera más
-casos verdaderos (recall alto) a costa de generar falsas alarmas (precision baja).
-`Dress` es el ejemplo extremo: recall 0,76 pero precision 0,30, es decir, captura
-la mayoría de los vestidos reales pero dos de cada tres cosas que llama "vestido"
-no lo son. Fue una decisión deliberada; sin los pesos, esas clases simplemente
-desaparecerían de las predicciones.
-
-### Qué revelan las confusiones sobre las limitaciones del MLP
-
-Los errores no son aleatorios y ahí está lo interesante:
-
-- **Topwear → Dress (107 casos)** y **Shoes → Sandal (79)** son confusiones entre
-  clases con siluetas casi idénticas a 32×32. Un vestido y una camiseta larga
-  producen prácticamente el mismo vector de píxeles a esa resolución.
-- **Bags → Wallets (40)** es el mismo objeto a distinta escala. Como las
-  fotografías de catálogo están todas encuadradas de forma similar, el MLP pierde
-  la referencia de tamaño real.
-- **Watches → Free Gifts (29)** revela un problema de la propia etiqueta:
-  `Free Gifts` no es una categoría *visual*, es una categoría *comercial*. Sus
-  imágenes son relojes, perfumes o bolsos. Ninguna arquitectura puede aprender
-  esa clase desde el píxel, y su F1 de 0,14 lo confirma. **No es un fallo del
-  modelo sino de la definición del problema**, y una versión posterior debería
-  excluirla explícitamente.
-
-La limitación de fondo es arquitectónica: **el MLP destruye la estructura
-espacial al aplanar la imagen**. Cada uno de los 3.072 píxeles es una feature
-independiente, sin ninguna noción de que dos píxeles vecinos están relacionados.
-Que funcione tan bien pese a eso se debe a que las fotos de catálogo son
-extremadamente uniformes —producto centrado, fondo blanco, encuadre constante—,
-así que la posición absoluta de cada píxel sí es informativa. Sobre fotos reales,
-con fondos y encuadres variables, este mismo modelo se derrumbaría. Ahí es donde
-una CNN, que aprende filtros invariantes a la traslación, marcaría la diferencia.
-
-### Falsos positivos y falsos negativos
-
-En un catálogo de e-commerce, que es el uso natural de este modelo, el costo de
-los errores depende de la clase:
-
-- **Falso positivo** — etiquetar un producto en una categoría que no le
-  corresponde. El producto aparece en búsquedas equivocadas: el cliente que filtra
-  por "vestidos" ve camisetas. Genera fricción y desconfianza, pero se corrige
-  editando la ficha.
-- **Falso negativo** — no asignar la categoría correcta. El producto queda
-  **invisible** en la navegación por categorías, que es como la mayoría de
-  usuarios compra. Comercialmente es el error más caro: un producto que no
-  aparece no se vende.
-
-Como el catálogo se navega principalmente por categorías, aquí conviene
-**priorizar el recall**, y por eso la configuración con pesos de clase —que
-sacrifica precision para elevar recall— es la adecuada para este caso de uso. La
-alternativa sensata en producción sería usar el modelo como **sugeridor**: que
-proponga las 3 categorías más probables y un operador confirme, en lugar de
-etiquetar automáticamente.
-
-### Limitaciones
-
-- Las 18 subcategorías con menos de 100 muestras fueron **excluidas**, no
-  resueltas. El modelo no sabe que existen y en producción las clasificaría mal
-  con total confianza.
-- `Free Gifts` es una categoría comercial sin correlato visual y contamina la
-  métrica macro; debería eliminarse del planteamiento.
-- La resolución de 32×32 es una restricción impuesta por el MLP, no por los
-  datos: elimina detalles (texturas, estampados, logos) que distinguirían
-  `Topwear` de `Dress`. Subirla haría crecer la capa de entrada cuadráticamente,
-  que es exactamente el problema que las CNN resuelven con pesos compartidos.
-- El entrenamiento se cortó por el límite de épocas, no por convergencia: el F1
-  de validación aún subía. Con más épocas el resultado mejoraría algo, aunque la
-  brecha entre train (90,1 %) y validación (89,0 %) indica que el margen restante
-  es pequeño.
-- Todas las imágenes provienen de un único catálogo (Myntra) con condiciones de
-  fotografía homogéneas. **El desempeño no se traslada a imágenes tomadas por
-  usuarios.**
